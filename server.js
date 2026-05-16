@@ -21,6 +21,12 @@ const rankUrls = {
   otc: "https://tw.stock.yahoo.com/rank/change-up?exchange=TWO"
 };
 
+function clearCache(prefix) {
+  for (const key of cache.keys()) {
+    if (key.startsWith(prefix)) cache.delete(key);
+  }
+}
+
 function cached(key, ttl, factory) {
   const item = cache.get(key);
   if (item && Date.now() - item.time < ttl) return item.value;
@@ -34,6 +40,7 @@ function cached(key, ttl, factory) {
 
 async function fetchText(url) {
   const res = await fetch(url, {
+    signal: AbortSignal.timeout(15000),
     headers: {
       "user-agent": "Mozilla/5.0 stock screener research tool",
       accept: "text/html,application/xhtml+xml,application/json"
@@ -103,7 +110,10 @@ export async function getChart(symbol) {
   if (!/^\d{4,6}\.(TW|TWO)$/.test(symbol)) throw new Error("Invalid Taiwan stock symbol");
   return cached(`chart:${symbol}`, CACHE_MS.chart, async () => {
     const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=1y&interval=1d&events=history`;
-    const res = await fetch(url, { headers: { "user-agent": "Mozilla/5.0" } });
+    const res = await fetch(url, {
+      signal: AbortSignal.timeout(15000),
+      headers: { "user-agent": "Mozilla/5.0" }
+    });
     if (!res.ok) throw new Error(`Chart fetch failed ${res.status}`);
     const json = await res.json();
     const result = json.chart?.result?.[0];
@@ -267,8 +277,12 @@ async function mapLimit(items, limit, mapper) {
   return results;
 }
 
-export async function scan(market = "listed") {
+export async function scan(market = "listed", force = false) {
   const key = `scan:${market}`;
+  if (force) {
+    clearCache("rank:");
+    cache.delete(key);
+  }
   return cached(key, CACHE_MS.scan, async () => {
     const markets = market === "allMarkets" ? ["listed", "otc"] : [market];
     const ranks = (await Promise.all(markets.map(getRank))).flat();
@@ -337,7 +351,7 @@ export const server = http.createServer(async (req, res) => {
       return;
     }
     if (url.pathname === "/api/scan") {
-      json(res, 200, await scan(url.searchParams.get("market") || "listed"));
+      json(res, 200, await scan(url.searchParams.get("market") || "listed", url.searchParams.get("refresh") === "1"));
       return;
     }
     await serveStatic(res, url.pathname);
