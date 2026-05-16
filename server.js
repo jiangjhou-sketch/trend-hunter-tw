@@ -181,12 +181,20 @@ function withIndicators(rows) {
     k = (2 / 3) * k + (1 / 3) * rsv;
     d = (2 / 3) * d + (1 / 3) * k;
     const hist = dif[i] != null && macdSignal[i] != null ? dif[i] - macdSignal[i] : null;
+    const volumeLots = row.volume / 1000;
+    const range = row.high - row.low;
+    const pricePressure = range > 0 ? (row.close - row.open) / range : Math.sign(row.close - row.open);
+    const volumePressure = vol20 ? Math.min(row.volume / vol20, 3) : 1;
+    const estimatedLargeLots = volumeLots * pricePressure * volumePressure;
     return {
       ...row,
+      volumeLots,
       ma5: average(closes.slice(Math.max(0, i - 4), i + 1)),
       ma20,
       volMa5: vol5,
       volMa20: vol20,
+      volMa5Lots: vol5 != null ? vol5 / 1000 : null,
+      volMa20Lots: vol20 != null ? vol20 / 1000 : null,
       volSurge: vol5 != null && vol20 ? vol5 / vol20 : null,
       macd: dif[i],
       macdSignal: macdSignal[i],
@@ -195,6 +203,8 @@ function withIndicators(rows) {
       d,
       bbUpper: ma20 != null && sd20 != null ? ma20 + sd20 * 2 : null,
       bbLower: ma20 != null && sd20 != null ? ma20 - sd20 * 2 : null,
+      large400Change: estimatedLargeLots * 0.45,
+      large1000Change: estimatedLargeLots * 0.2,
       bigMoneyProxy: vol20 ? ((row.close - row.open) / row.open) * (row.volume / vol20) : null
     };
   });
