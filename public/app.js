@@ -14,27 +14,45 @@ function setStatus(text) {
   el("status").textContent = text;
 }
 
-async function api(path) {
-  const res = await fetch(path);
-  const data = await res.json();
-  if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
-  return data;
+async function api(path, timeoutMs = 120000) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(path, { signal: controller.signal });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+    return data;
+  } catch (error) {
+    if (error.name === "AbortError") throw new Error("連線逾時，請稍後再重新掃描");
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
-async function runScan() {
-  setStatus("掃描中，第一次會需要抓取前100日K資料...");
-  el("stockList").innerHTML = `<div class="empty">正在分析量能、MACD、KD與布林通道。</div>`;
+async function runScan(options = {}) {
+  const refreshBtn = el("refreshBtn");
+  refreshBtn.disabled = true;
+  refreshBtn.textContent = "掃描中";
+  const startedAt = new Date().toLocaleTimeString("zh-TW", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  setStatus(`${options.force ? "強制重新掃描" : "掃描中"}，開始 ${startedAt}`);
+  el("stockList").innerHTML = `<div class="empty">正在分析漲幅排行、均量條件與技術指標...</div>`;
+
   try {
-    const data = await api(`/api/scan?market=${state.market}`);
+    const refresh = options.force ? "&refresh=1" : "";
+    const data = await api(`/api/scan?market=${state.market}${refresh}&_=${Date.now()}`, 180000);
     state.scan = data;
     state.selected = data.candidates[0] || null;
     renderScan(data);
     if (state.selected) await loadDetail(state.selected);
     else clearDetail();
-    setStatus("掃描完成");
+    setStatus(`掃描完成 ${new Date().toLocaleTimeString("zh-TW", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`);
   } catch (error) {
     setStatus(`發生錯誤：${error.message}`);
     el("stockList").innerHTML = `<div class="empty">無法完成掃描：${error.message}</div>`;
+  } finally {
+    refreshBtn.disabled = false;
+    refreshBtn.textContent = "重新掃描";
   }
 }
 
@@ -43,21 +61,27 @@ function renderScan(data) {
   el("candidateCount").textContent = data.candidates.length;
   el("recommendCount").textContent = data.recommendations.length;
   el("scanTime").textContent = new Date(data.scannedAt).toLocaleTimeString("zh-TW", { hour: "2-digit", minute: "2-digit" });
-  el("sourceLabel").textContent = state.market === "listed" ? "上市" : state.market === "otc" ? "上櫃" : "上市+上櫃";
+  el("sourceLabel").textContent = state.market === "listed" ? "上市" : state.market === "otc" ? "上櫃" : "上市 + 上櫃";
 
   if (!data.candidates.length) {
-    el("stockList").innerHTML = `<div class="empty">目前沒有股票符合連續2至5日的量能條件。</div>`;
+    el("stockList").innerHTML = `<div class="empty">目前沒有股票符合連續 2 至 5 日的量能條件。</div>`;
     return;
   }
 
   el("stockList").innerHTML = data.candidates.map((item) => `
     <button class="stock-item ${state.selected?.symbol === item.symbol ? "active" : ""}" data-symbol="${item.symbol}">
       <div>
-        <div class="stock-name">${item.name} ${item.symbol}</div>
+        <div class="stock-name">
+          <span>${item.name}</span>
+          <span class="stock-symbol">${item.symbol}</span>
+        </div>
         <div class="stock-meta">排行 ${item.rank}｜漲幅 ${fmt(item.changePercent)}%｜連續 ${item.summary.streak} 日</div>
         <div class="stock-reason">${item.ai.reasons[0] || "符合量能條件"}</div>
       </div>
-      <div class="score">${item.ai.score}</div>
+      <div class="score-badge" title="AI推薦分數，滿分100">
+        <span>AI分數</span>
+        <strong>${item.ai.score}</strong>
+      </div>
     </button>
   `).join("");
 
@@ -73,11 +97,11 @@ function renderScan(data) {
 
 async function loadDetail(item) {
   el("detailTitle").textContent = `${item.name} ${item.symbol}`;
-  el("detailSub").textContent = `AI分數 ${item.ai.score}｜漲幅 ${fmt(item.changePercent)}%｜5日均量/20日均量 ${fmt(item.summary.volumeMomentum)} 倍`;
+  el("detailSub").textContent = `AI分數 ${item.ai.score}｜漲幅 ${fmt(item.changePercent)}%｜5日均量 / 20日均量 ${fmt(item.summary.volumeMomentum)} 倍`;
   el("yahooLink").href = `https://tw.stock.yahoo.com/quote/${item.symbol}`;
   renderReasons(item);
   setStatus(`載入 ${item.name} 技術圖表...`);
-  const data = await api(`/api/chart?symbol=${encodeURIComponent(item.symbol)}`);
+  const data = await api(`/api/chart?symbol=${encodeURIComponent(item.symbol)}`, 30000);
   state.chartRows = data.rows;
   drawChart();
   setStatus("圖表完成");
@@ -87,7 +111,7 @@ function renderReasons(item) {
   const metrics = [
     ["AI推薦理由", item.ai.reasons.join("、") || "符合量能篩選"],
     ["MACD", item.summary.macdBull ? "多方排列" : "尚未轉強"],
-    ["KD", item.summary.kdBull ? `K ${fmt(item.summary.latest.k)} > D ${fmt(item.summary.latest.d)}` : "KD未形成多方"],
+    ["KD", item.summary.kdBull ? `K ${fmt(item.summary.latest.k)} > D ${fmt(item.summary.latest.d)}` : "KD尚未形成多方"],
     ["籌碼推估", item.summary.bigMoneyTrend > 0 ? "近5日偏買盤" : "近5日偏保守"]
   ];
   el("recommendBox").innerHTML = metrics.map(([label, value]) => `
@@ -116,8 +140,9 @@ function drawChart() {
 function baseOption(dates) {
   return {
     animation: false,
+    color: ["#2563eb", "#0f766e", "#f59e0b", "#ef4444", "#38bdf8"],
     tooltip: { trigger: "axis", axisPointer: { type: "cross" } },
-    legend: { top: 8 },
+    legend: { top: 8, textStyle: { color: "#52616f" } },
     grid: [{ left: 58, right: 28, top: 48, bottom: 72 }],
     xAxis: [{ type: "category", data: dates, boundaryGap: false }],
     yAxis: [{ scale: true }],
@@ -200,6 +225,6 @@ document.querySelectorAll(".chart-tabs button").forEach((btn) => {
   });
 });
 
-el("refreshBtn").addEventListener("click", runScan);
+el("refreshBtn").addEventListener("click", () => runScan({ force: true }));
 window.addEventListener("resize", () => state.chart?.resize());
 runScan();
