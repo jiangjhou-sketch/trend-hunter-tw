@@ -36,7 +36,7 @@ async function runScan(options = {}) {
   refreshBtn.textContent = "掃描中";
   const startedAt = new Date().toLocaleTimeString("zh-TW", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
   setStatus(`${options.force ? "強制重新掃描" : "掃描中"}，開始 ${startedAt}`);
-  el("stockList").innerHTML = `<div class="empty">正在分析漲幅排行、均量條件與技術指標...</div>`;
+  el("stockList").innerHTML = `<div class="empty">正在分析漲幅排行、至少連續 2 日均量條件與技術指標...</div>`;
 
   try {
     const refresh = options.force ? "&refresh=1" : "";
@@ -64,7 +64,7 @@ function renderScan(data) {
   el("sourceLabel").textContent = state.market === "listed" ? "上市" : state.market === "otc" ? "上櫃" : "上市 + 上櫃";
 
   if (!data.candidates.length) {
-    el("stockList").innerHTML = `<div class="empty">目前沒有股票符合連續 2 至 5 日的量能條件。</div>`;
+    el("stockList").innerHTML = `<div class="empty">目前沒有股票符合至少連續 2 日的量能條件。</div>`;
     return;
   }
 
