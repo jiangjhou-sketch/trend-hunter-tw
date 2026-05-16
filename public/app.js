@@ -9,6 +9,7 @@ const state = {
 
 const el = (id) => document.getElementById(id);
 const fmt = (n, digits = 2) => Number.isFinite(n) ? n.toLocaleString("zh-TW", { maximumFractionDigits: digits }) : "-";
+const lots = (sharesOrLots) => fmt(sharesOrLots, 0);
 
 function setStatus(text) {
   el("status").textContent = text;
@@ -75,7 +76,7 @@ function renderScan(data) {
           <span>${item.name}</span>
           <span class="stock-symbol">${item.symbol}</span>
         </div>
-        <div class="stock-meta">排行 ${item.rank}｜漲幅 ${fmt(item.changePercent)}%｜連續 ${item.summary.streak} 日</div>
+        <div class="stock-meta">排行 ${item.rank}｜漲幅 ${fmt(item.changePercent)}%｜成交 ${lots(item.volume)} 張｜連續 ${item.summary.streak} 日</div>
         <div class="stock-reason">${item.ai.reasons[0] || "符合量能條件"}</div>
       </div>
       <div class="score-badge" title="AI推薦分數，滿分100">
@@ -97,7 +98,7 @@ function renderScan(data) {
 
 async function loadDetail(item) {
   el("detailTitle").textContent = `${item.name} ${item.symbol}`;
-  el("detailSub").textContent = `AI分數 ${item.ai.score}｜漲幅 ${fmt(item.changePercent)}%｜5日均量 / 20日均量 ${fmt(item.summary.volumeMomentum)} 倍`;
+  el("detailSub").textContent = `AI分數 ${item.ai.score}｜漲幅 ${fmt(item.changePercent)}%｜成交 ${lots(item.volume)} 張｜5日均量 / 20日均量 ${fmt(item.summary.volumeMomentum)} 倍`;
   el("yahooLink").href = `https://tw.stock.yahoo.com/quote/${item.symbol}`;
   renderReasons(item);
   setStatus(`載入 ${item.name} 技術圖表...`);
@@ -108,11 +109,12 @@ async function loadDetail(item) {
 }
 
 function renderReasons(item) {
+  const latest = item.summary.latest;
   const metrics = [
     ["AI推薦理由", item.ai.reasons.join("、") || "符合量能篩選"],
-    ["MACD", item.summary.macdBull ? "多方排列" : "尚未轉強"],
-    ["KD", item.summary.kdBull ? `K ${fmt(item.summary.latest.k)} > D ${fmt(item.summary.latest.d)}` : "KD尚未形成多方"],
-    ["籌碼推估", item.summary.bigMoneyTrend > 0 ? "近5日偏買盤" : "近5日偏保守"]
+    ["成交量", `最新 ${lots(latest.volumeLots)} 張，5日均量 ${lots(latest.volMa5Lots)} 張`],
+    ["MACD / KD", `${item.summary.macdBull ? "MACD多方" : "MACD未轉強"}，${item.summary.kdBull ? "KD多方" : "KD保守"}`],
+    ["大戶推估", `400張 ${fmt(latest.large400Change, 0)} 張，1000張 ${fmt(latest.large1000Change, 0)} 張`]
   ];
   el("recommendBox").innerHTML = metrics.map(([label, value]) => `
     <div class="reason-pill"><span>${label}</span><strong>${value}</strong></div>
@@ -140,7 +142,7 @@ function drawChart() {
 function baseOption(dates) {
   return {
     animation: false,
-    color: ["#2563eb", "#0f766e", "#f59e0b", "#ef4444", "#38bdf8"],
+    color: ["#2563eb", "#0f766e", "#f59e0b", "#ef4444", "#38bdf8", "#7c3aed"],
     tooltip: { trigger: "axis", axisPointer: { type: "cross" } },
     legend: { top: 8, textStyle: { color: "#52616f" } },
     grid: [{ left: 58, right: 28, top: 48, bottom: 72 }],
@@ -152,7 +154,7 @@ function baseOption(dates) {
 
 function priceOption(rows, dates) {
   const option = baseOption(dates);
-  option.legend.data = ["K線", "MA5", "MA20", "布林上緣", "布林下緣", "成交量"];
+  option.legend.data = ["K線", "MA5", "MA20", "布林上緣", "布林下緣", "成交量(張)"];
   option.grid = [
     { left: 58, right: 28, top: 48, height: 310 },
     { left: 58, right: 28, top: 390, height: 82 }
@@ -161,14 +163,17 @@ function priceOption(rows, dates) {
     { type: "category", data: dates, boundaryGap: true },
     { type: "category", data: dates, gridIndex: 1, boundaryGap: true, axisLabel: { show: false } }
   ];
-  option.yAxis = [{ scale: true }, { gridIndex: 1, scale: true }];
+  option.yAxis = [
+    { scale: true },
+    { gridIndex: 1, scale: true, name: "張" }
+  ];
   option.series = [
     { name: "K線", type: "candlestick", data: rows.map((r) => [r.open, r.close, r.low, r.high]) },
     { name: "MA5", type: "line", data: rows.map((r) => r.ma5), smooth: true, showSymbol: false },
     { name: "MA20", type: "line", data: rows.map((r) => r.ma20), smooth: true, showSymbol: false },
     { name: "布林上緣", type: "line", data: rows.map((r) => r.bbUpper), showSymbol: false, lineStyle: { type: "dashed" } },
     { name: "布林下緣", type: "line", data: rows.map((r) => r.bbLower), showSymbol: false, lineStyle: { type: "dashed" } },
-    { name: "成交量", type: "bar", xAxisIndex: 1, yAxisIndex: 1, data: rows.map((r) => r.volume) }
+    { name: "成交量(張)", type: "bar", xAxisIndex: 1, yAxisIndex: 1, data: rows.map((r) => r.volumeLots) }
   ];
   return option;
 }
@@ -199,10 +204,15 @@ function kdOption(rows, dates) {
 
 function chipOption(rows, dates) {
   const option = baseOption(dates);
-  option.legend.data = ["大戶買盤推估", "5日量比"];
+  option.legend.data = ["400張大戶推估增減", "1000張大戶推估增減", "5日量比"];
+  option.yAxis = [
+    { scale: true, name: "張" },
+    { scale: true, name: "倍" }
+  ];
   option.series = [
-    { name: "大戶買盤推估", type: "bar", data: rows.map((r) => r.bigMoneyProxy) },
-    { name: "5日量比", type: "line", data: rows.map((r) => r.volSurge), showSymbol: false }
+    { name: "400張大戶推估增減", type: "bar", data: rows.map((r) => r.large400Change) },
+    { name: "1000張大戶推估增減", type: "bar", data: rows.map((r) => r.large1000Change) },
+    { name: "5日量比", type: "line", yAxisIndex: 1, data: rows.map((r) => r.volSurge), showSymbol: false }
   ];
   return option;
 }
