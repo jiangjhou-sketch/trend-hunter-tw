@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>台股漲幅排行量能篩選器</title>
+    <link rel="stylesheet" href="/styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <h1>台股漲幅排行量能篩選器</h1>
+        <p>分析 Yahoo 股市漲幅排行前100，找出 5日均量大於20日均量且連續2至5日成立的股票。</p>
+      </div>
+      <button id="refreshBtn" class="primary">重新掃描</button>
+    </header>
+
+    <main>
+      <section class="controls">
+        <div class="segmented" role="tablist" aria-label="市場">
+          <button class="active" data-market="listed">上市前100</button>
+          <button data-market="otc">上櫃前100</button>
+          <button data-market="allMarkets">上市+上櫃</button>
+        </div>
+        <div class="status" id="status">準備掃描</div>
+      </section>
+
+      <section class="summary-grid">
+        <div class="metric">
+          <span>已分析</span>
+          <strong id="totalCount">0</strong>
+        </div>
+        <div class="metric">
+          <span>符合條件</span>
+          <strong id="candidateCount">0</strong>
+        </div>
+        <div class="metric">
+          <span>AI推薦</span>
+          <strong id="recommendCount">0</strong>
+        </div>
+        <div class="metric">
+          <span>資料時間</span>
+          <strong id="scanTime">-</strong>
+        </div>
+      </section>
+
+      <section class="layout">
+        <aside class="panel">
+          <div class="panel-head">
+            <h2>篩選結果</h2>
+            <span id="sourceLabel">上市</span>
+          </div>
+          <div id="stockList" class="stock-list"></div>
+        </aside>
+
+        <section class="detail">
+          <div class="panel-head detail-head">
+            <div>
+              <h2 id="detailTitle">尚未選取股票</h2>
+              <p id="detailSub">掃描完成後選擇股票查看技術分析。</p>
+            </div>
+            <a id="yahooLink" class="ghost" href="https://tw.stock.yahoo.com/rank/change-up" target="_blank" rel="noreferrer">Yahoo來源</a>
+          </div>
+
+          <div class="recommend-box" id="recommendBox"></div>
+
+          <div class="chart-tabs">
+            <button class="active" data-chart="price">價量/布林</button>
+            <button data-chart="macd">MACD</button>
+            <button data-chart="kd">KD</button>
+            <button data-chart="chip">大戶/籌碼</button>
+          </div>
+          <div id="chart" class="chart"></div>
+          <div class="chip-note">
+            分點進出與大戶持股屬交易所、集保或券商授權資料。本工具目前以可公開取得的日K價量推估籌碼壓力，保留資料層供後續接入付費或授權 API。
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

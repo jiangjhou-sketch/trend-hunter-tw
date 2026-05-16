@@ -1,0 +1,205 @@
+const state = {
+  market: "listed",
+  scan: null,
+  selected: null,
+  chartRows: [],
+  chartMode: "price",
+  chart: null
+};
+
+const el = (id) => document.getElementById(id);
+const fmt = (n, digits = 2) => Number.isFinite(n) ? n.toLocaleString("zh-TW", { maximumFractionDigits: digits }) : "-";
+
+function setStatus(text) {
+  el("status").textContent = text;
+}
+
+async function api(path) {
+  const res = await fetch(path);
+  const data = await res.json();
+  if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
+}
+
+async function runScan() {
+  setStatus("掃描中，第一次會需要抓取前100日K資料...");
+  el("stockList").innerHTML = `<div class="empty">正在分析量能、MACD、KD與布林通道。</div>`;
+  try {
+    const data = await api(`/api/scan?market=${state.market}`);
+    state.scan = data;
+    state.selected = data.candidates[0] || null;
+    renderScan(data);
+    if (state.selected) await loadDetail(state.selected);
+    else clearDetail();
+    setStatus("掃描完成");
+  } catch (error) {
+    setStatus(`發生錯誤：${error.message}`);
+    el("stockList").innerHTML = `<div class="empty">無法完成掃描：${error.message}</div>`;
+  }
+}
+
+function renderScan(data) {
+  el("totalCount").textContent = data.total;
+  el("candidateCount").textContent = data.candidates.length;
+  el("recommendCount").textContent = data.recommendations.length;
+  el("scanTime").textContent = new Date(data.scannedAt).toLocaleTimeString("zh-TW", { hour: "2-digit", minute: "2-digit" });
+  el("sourceLabel").textContent = state.market === "listed" ? "上市" : state.market === "otc" ? "上櫃" : "上市+上櫃";
+
+  if (!data.candidates.length) {
+    el("stockList").innerHTML = `<div class="empty">目前沒有股票符合連續2至5日的量能條件。</div>`;
+    return;
+  }
+
+  el("stockList").innerHTML = data.candidates.map((item) => `
+    <button class="stock-item ${state.selected?.symbol === item.symbol ? "active" : ""}" data-symbol="${item.symbol}">
+      <div>
+        <div class="stock-name">${item.name} ${item.symbol}</div>
+        <div class="stock-meta">排行 ${item.rank}｜漲幅 ${fmt(item.changePercent)}%｜連續 ${item.summary.streak} 日</div>
+        <div class="stock-reason">${item.ai.reasons[0] || "符合量能條件"}</div>
+      </div>
+      <div class="score">${item.ai.score}</div>
+    </button>
+  `).join("");
+
+  document.querySelectorAll(".stock-item").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const item = state.scan.candidates.find((row) => row.symbol === btn.dataset.symbol);
+      state.selected = item;
+      renderScan(state.scan);
+      await loadDetail(item);
+    });
+  });
+}
+
+async function loadDetail(item) {
+  el("detailTitle").textContent = `${item.name} ${item.symbol}`;
+  el("detailSub").textContent = `AI分數 ${item.ai.score}｜漲幅 ${fmt(item.changePercent)}%｜5日均量/20日均量 ${fmt(item.summary.volumeMomentum)} 倍`;
+  el("yahooLink").href = `https://tw.stock.yahoo.com/quote/${item.symbol}`;
+  renderReasons(item);
+  setStatus(`載入 ${item.name} 技術圖表...`);
+  const data = await api(`/api/chart?symbol=${encodeURIComponent(item.symbol)}`);
+  state.chartRows = data.rows;
+  drawChart();
+  setStatus("圖表完成");
+}
+
+function renderReasons(item) {
+  const metrics = [
+    ["AI推薦理由", item.ai.reasons.join("、") || "符合量能篩選"],
+    ["MACD", item.summary.macdBull ? "多方排列" : "尚未轉強"],
+    ["KD", item.summary.kdBull ? `K ${fmt(item.summary.latest.k)} > D ${fmt(item.summary.latest.d)}` : "KD未形成多方"],
+    ["籌碼推估", item.summary.bigMoneyTrend > 0 ? "近5日偏買盤" : "近5日偏保守"]
+  ];
+  el("recommendBox").innerHTML = metrics.map(([label, value]) => `
+    <div class="reason-pill"><span>${label}</span><strong>${value}</strong></div>
+  `).join("");
+}
+
+function clearDetail() {
+  el("detailTitle").textContent = "沒有符合條件的股票";
+  el("detailSub").textContent = "請稍後重新掃描，或切換市場。";
+  el("recommendBox").innerHTML = "";
+  if (state.chart) state.chart.clear();
+}
+
+function drawChart() {
+  if (!state.chart) state.chart = echarts.init(el("chart"));
+  const rows = state.chartRows.slice(-140);
+  const dates = rows.map((r) => r.date);
+  const option = state.chartMode === "macd" ? macdOption(rows, dates)
+    : state.chartMode === "kd" ? kdOption(rows, dates)
+    : state.chartMode === "chip" ? chipOption(rows, dates)
+    : priceOption(rows, dates);
+  state.chart.setOption(option, true);
+}
+
+function baseOption(dates) {
+  return {
+    animation: false,
+    tooltip: { trigger: "axis", axisPointer: { type: "cross" } },
+    legend: { top: 8 },
+    grid: [{ left: 58, right: 28, top: 48, bottom: 72 }],
+    xAxis: [{ type: "category", data: dates, boundaryGap: false }],
+    yAxis: [{ scale: true }],
+    dataZoom: [{ type: "inside" }, { type: "slider", height: 22, bottom: 22 }]
+  };
+}
+
+function priceOption(rows, dates) {
+  const option = baseOption(dates);
+  option.legend.data = ["K線", "MA5", "MA20", "布林上緣", "布林下緣", "成交量"];
+  option.grid = [
+    { left: 58, right: 28, top: 48, height: 310 },
+    { left: 58, right: 28, top: 390, height: 82 }
+  ];
+  option.xAxis = [
+    { type: "category", data: dates, boundaryGap: true },
+    { type: "category", data: dates, gridIndex: 1, boundaryGap: true, axisLabel: { show: false } }
+  ];
+  option.yAxis = [{ scale: true }, { gridIndex: 1, scale: true }];
+  option.series = [
+    { name: "K線", type: "candlestick", data: rows.map((r) => [r.open, r.close, r.low, r.high]) },
+    { name: "MA5", type: "line", data: rows.map((r) => r.ma5), smooth: true, showSymbol: false },
+    { name: "MA20", type: "line", data: rows.map((r) => r.ma20), smooth: true, showSymbol: false },
+    { name: "布林上緣", type: "line", data: rows.map((r) => r.bbUpper), showSymbol: false, lineStyle: { type: "dashed" } },
+    { name: "布林下緣", type: "line", data: rows.map((r) => r.bbLower), showSymbol: false, lineStyle: { type: "dashed" } },
+    { name: "成交量", type: "bar", xAxisIndex: 1, yAxisIndex: 1, data: rows.map((r) => r.volume) }
+  ];
+  return option;
+}
+
+function macdOption(rows, dates) {
+  const option = baseOption(dates);
+  option.legend.data = ["DIF", "Signal", "Histogram"];
+  option.series = [
+    { name: "DIF", type: "line", data: rows.map((r) => r.macd), showSymbol: false },
+    { name: "Signal", type: "line", data: rows.map((r) => r.macdSignal), showSymbol: false },
+    { name: "Histogram", type: "bar", data: rows.map((r) => r.macdHist) }
+  ];
+  return option;
+}
+
+function kdOption(rows, dates) {
+  const option = baseOption(dates);
+  option.legend.data = ["K", "D", "80", "20"];
+  option.yAxis = [{ min: 0, max: 100 }];
+  option.series = [
+    { name: "K", type: "line", data: rows.map((r) => r.k), showSymbol: false },
+    { name: "D", type: "line", data: rows.map((r) => r.d), showSymbol: false },
+    { name: "80", type: "line", data: rows.map(() => 80), showSymbol: false, lineStyle: { type: "dashed" } },
+    { name: "20", type: "line", data: rows.map(() => 20), showSymbol: false, lineStyle: { type: "dashed" } }
+  ];
+  return option;
+}
+
+function chipOption(rows, dates) {
+  const option = baseOption(dates);
+  option.legend.data = ["大戶買盤推估", "5日量比"];
+  option.series = [
+    { name: "大戶買盤推估", type: "bar", data: rows.map((r) => r.bigMoneyProxy) },
+    { name: "5日量比", type: "line", data: rows.map((r) => r.volSurge), showSymbol: false }
+  ];
+  return option;
+}
+
+document.querySelectorAll(".segmented button").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".segmented button").forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    state.market = btn.dataset.market;
+    runScan();
+  });
+});
+
+document.querySelectorAll(".chart-tabs button").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".chart-tabs button").forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    state.chartMode = btn.dataset.chart;
+    drawChart();
+  });
+});
+
+el("refreshBtn").addEventListener("click", runScan);
+window.addEventListener("resize", () => state.chart?.resize());
+runScan();
