@@ -211,7 +211,7 @@ function summarizeChart(rows) {
   return {
     latest,
     streak,
-    pass: streak >= 2 && streak <= 5,
+    pass: streak >= 2,
     macdBull: latest?.macd > latest?.macdSignal,
     kdBull: latest?.k > latest?.d,
     priceAboveMa20: latest?.close > latest?.ma20,
@@ -228,7 +228,7 @@ function scoreCandidate(item) {
   const s = item.summary;
   let score = 0;
   const reasons = [];
-  if (s.streak >= 2 && s.streak <= 5) {
+  if (s.streak >= 2) {
     score += 32;
     reasons.push(`5日均量連續 ${s.streak} 日大於20日均量`);
   }
