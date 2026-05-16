@@ -10,6 +10,7 @@ const state = {
 const el = (id) => document.getElementById(id);
 const fmt = (n, digits = 2) => Number.isFinite(n) ? n.toLocaleString("zh-TW", { maximumFractionDigits: digits }) : "-";
 const lots = (sharesOrLots) => fmt(sharesOrLots, 0);
+const priceClass = (n) => Number(n) >= 0 ? "up" : "down";
 
 function setStatus(text) {
   el("status").textContent = text;
@@ -76,7 +77,11 @@ function renderScan(data) {
           <span>${item.name}</span>
           <span class="stock-symbol">${item.symbol}</span>
         </div>
-        <div class="stock-meta">排行 ${item.rank}｜漲幅 ${fmt(item.changePercent)}%｜成交 ${lots(item.volume)} 張｜連續 ${item.summary.streak} 日</div>
+        <div class="list-price-row">
+          <strong class="list-price">${fmt(item.price)}</strong>
+          <span class="${priceClass(item.change)}">+${fmt(item.change)} / +${fmt(item.changePercent)}%</span>
+        </div>
+        <div class="stock-meta">排行 ${item.rank}｜成交 ${lots(item.volume)} 張｜連續 ${item.summary.streak} 日</div>
         <div class="stock-reason">${item.ai.reasons[0] || "符合量能條件"}</div>
       </div>
       <div class="score-badge" title="AI推薦分數，滿分100">
@@ -98,14 +103,33 @@ function renderScan(data) {
 
 async function loadDetail(item) {
   el("detailTitle").textContent = `${item.name} ${item.symbol}`;
-  el("detailSub").textContent = `AI分數 ${item.ai.score}｜漲幅 ${fmt(item.changePercent)}%｜成交 ${lots(item.volume)} 張｜5日均量 / 20日均量 ${fmt(item.summary.volumeMomentum)} 倍`;
+  el("detailSub").textContent = `AI分數 ${item.ai.score}｜成交 ${lots(item.volume)} 張｜5日均量 / 20日均量 ${fmt(item.summary.volumeMomentum)} 倍`;
   el("yahooLink").href = `https://tw.stock.yahoo.com/quote/${item.symbol}`;
+  renderPriceStrip(item);
   renderReasons(item);
   setStatus(`載入 ${item.name} 技術圖表...`);
   const data = await api(`/api/chart?symbol=${encodeURIComponent(item.symbol)}`, 30000);
   state.chartRows = data.rows;
   drawChart();
   setStatus("圖表完成");
+}
+
+function renderPriceStrip(item) {
+  const changeText = `${item.change >= 0 ? "+" : ""}${fmt(item.change)} / ${item.changePercent >= 0 ? "+" : ""}${fmt(item.changePercent)}%`;
+  const metrics = [
+    ["現價", fmt(item.price), "price-main"],
+    ["漲跌 / 漲幅", changeText, priceClass(item.change)],
+    ["最高", fmt(item.high), ""],
+    ["最低", fmt(item.low), ""],
+    ["成交量", `${lots(item.volume)} 張`, ""],
+    ["資料日期", item.dataDate || "-", ""]
+  ];
+  el("priceStrip").innerHTML = metrics.map(([label, value, cls]) => `
+    <div class="price-card">
+      <span>${label}</span>
+      <strong class="${cls}">${value}</strong>
+    </div>
+  `).join("");
 }
 
 function renderReasons(item) {
@@ -124,6 +148,7 @@ function renderReasons(item) {
 function clearDetail() {
   el("detailTitle").textContent = "沒有符合條件的股票";
   el("detailSub").textContent = "請稍後重新掃描，或切換市場。";
+  el("priceStrip").innerHTML = "";
   el("recommendBox").innerHTML = "";
   if (state.chart) state.chart.clear();
 }
