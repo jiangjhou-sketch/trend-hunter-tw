@@ -12,7 +12,8 @@ const cache = new Map();
 const CACHE_MS = {
   rank: 3 * 60 * 1000,
   chart: 30 * 60 * 1000,
-  scan: 5 * 60 * 1000
+  scan: 5 * 60 * 1000,
+  institution: 12 * 60 * 60 * 1000
 };
 
 const rankUrls = {
@@ -67,6 +68,11 @@ function toNumber(value) {
   if (value == null) return null;
   const n = Number(String(value).replace(/[,%]/g, ""));
   return Number.isFinite(n) ? n : null;
+}
+
+function toInt(value) {
+  const n = Number(String(value ?? "").replace(/[,]/g, ""));
+  return Number.isFinite(n) ? n : 0;
 }
 
 function parseRank(html, market) {
@@ -316,6 +322,137 @@ export async function scan(market = "listed", force = false) {
   });
 }
 
+export async function getBrokerBranches(symbol, days = 5) {
+  if (!/^\d{4,6}\.(TW|TWO)$/.test(symbol)) throw new Error("Invalid Taiwan stock symbol");
+  const stockNo = symbol.split(".")[0];
+  const normalizedDays = Math.max(1, Math.min(30, Number(days) || 5));
+  const cmoneyUrl = `https://www.cmoney.tw/forum/stock/${stockNo}?s=broker`;
+  const officialUrl = symbol.endsWith(".TWO")
+    ? "https://www.tpex.org.tw/zh-tw/mainboard/trading/info/brokerBS.html"
+    : "https://bsr.twse.com.tw/bshtm/bsWelcome.aspx";
+
+  try {
+    const html = await fetchText(cmoneyUrl);
+    const available = html.includes("券商分點") || html.includes("買賣超");
+    return {
+      symbol,
+      stockNo,
+      days: normalizedDays,
+      source: "CMoney / 官方分點資料",
+      sourceUrl: cmoneyUrl,
+      officialUrl,
+      buyTop: [],
+      sellTop: [],
+      available,
+      message: available
+        ? "公開頁面可開啟，但未提供穩定的結構化分點 API；請使用來源連結查看真實券商分點，或接入授權 API 後可直接顯示前15大。"
+        : "目前無法取得分點公開頁面。"
+    };
+  } catch (error) {
+    return {
+      symbol,
+      stockNo,
+      days: normalizedDays,
+      source: "官方分點資料",
+      sourceUrl: cmoneyUrl,
+      officialUrl,
+      buyTop: [],
+      sellTop: [],
+      available: false,
+      message: `目前無法取得分點資料：${error.message}`
+    };
+  }
+}
+
+async function fetchInstitutionDay(symbol, date) {
+  const stockNo = symbol.split(".")[0];
+  const isOtc = symbol.endsWith(".TWO");
+  const ymd = date.replaceAll("-", "");
+  const key = `institution:${symbol}:${date}`;
+  return cached(key, CACHE_MS.institution, async () => {
+    if (isOtc) {
+      const slashDate = date.replaceAll("-", "/");
+      const url = `https://www.tpex.org.tw/www/zh-tw/insti/dailyTrade?date=${slashDate}&type=Daily&response=json`;
+      const res = await fetch(url, { signal: AbortSignal.timeout(15000), headers: { "user-agent": "Mozilla/5.0" } });
+      if (!res.ok) throw new Error(`TPEX institution fetch failed ${res.status}`);
+      const json = await res.json();
+      const row = json.tables?.[0]?.data?.find((item) => String(item[0]).trim() === stockNo);
+      if (!row) return null;
+      return {
+        date,
+        foreignLots: toInt(row[4]) / 1000,
+        investmentTrustLots: toInt(row[13]) / 1000,
+        dealerLots: toInt(row[22]) / 1000,
+        totalLots: toInt(row[23]) / 1000
+      };
+    }
+
+    const url = `https://www.twse.com.tw/rwd/zh/fund/T86?date=${ymd}&selectType=ALLBUT0999&response=json`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(15000), headers: { "user-agent": "Mozilla/5.0" } });
+    if (!res.ok) throw new Error(`TWSE institution fetch failed ${res.status}`);
+    const json = await res.json();
+    const row = json.data?.find((item) => String(item[0]).trim() === stockNo);
+    if (!row) return null;
+    return {
+      date,
+      foreignLots: (toInt(row[4]) + toInt(row[7])) / 1000,
+      investmentTrustLots: toInt(row[10]) / 1000,
+      dealerLots: (toInt(row[11]) + toInt(row[14]) + toInt(row[17])) / 1000,
+      totalLots: toInt(row[18]) / 1000
+    };
+  });
+}
+
+export async function getInstitutional(symbol, days = 5) {
+  if (!/^\d{4,6}\.(TW|TWO)$/.test(symbol)) throw new Error("Invalid Taiwan stock symbol");
+  const normalizedDays = Math.max(1, Math.min(20, Number(days) || 5));
+  const chart = await getChart(symbol);
+  const recent = chart.slice(-Math.max(normalizedDays * 3, 15)).reverse();
+  const rows = [];
+  for (const item of recent) {
+    if (rows.length >= normalizedDays) break;
+    const row = await fetchInstitutionDay(symbol, item.date);
+    if (row) {
+      rows.push({
+        ...row,
+        volumeLots: item.volumeLots,
+        force: item.volumeLots ? row.totalLots / item.volumeLots : 0
+      });
+    }
+  }
+
+  const totalLots = rows.reduce((sum, row) => sum + row.totalLots, 0);
+  const avgVolumeLots = average(rows.map((row) => row.volumeLots)) || 0;
+  const strength = avgVolumeLots ? (totalLots / avgVolumeLots) * 100 : 0;
+  let buyStreak = 0;
+  let sellStreak = 0;
+  for (const row of rows) {
+    if (row.totalLots > 0 && sellStreak === 0) buyStreak += 1;
+    else if (row.totalLots < 0 && buyStreak === 0) sellStreak += 1;
+    else break;
+  }
+  const latest = chart.at(-1);
+  const concentrationScore = Math.max(0, Math.min(100,
+    45
+    + Math.min(25, Math.max(-25, strength / 4))
+    + Math.min(15, Math.max(-15, (latest?.volSurge || 1) * 8 - 8))
+    + Math.min(15, Math.max(-15, (latest?.large400Change || 0) / 500))
+  ));
+
+  return {
+    symbol,
+    days: normalizedDays,
+    rows,
+    totalLots,
+    avgVolumeLots,
+    strength,
+    buyStreak,
+    sellStreak,
+    concentrationScore: Math.round(concentrationScore),
+    source: symbol.endsWith(".TWO") ? "TPEx 三大法人買賣明細資訊" : "TWSE 三大法人買賣超日報"
+  };
+}
+
 function json(res, code, data) {
   const body = JSON.stringify(data);
   res.writeHead(code, {
@@ -362,6 +499,14 @@ export const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === "/api/scan") {
       json(res, 200, await scan(url.searchParams.get("market") || "listed", url.searchParams.get("refresh") === "1"));
+      return;
+    }
+    if (url.pathname === "/api/brokers") {
+      json(res, 200, await getBrokerBranches(url.searchParams.get("symbol") || "", url.searchParams.get("days") || "5"));
+      return;
+    }
+    if (url.pathname === "/api/institution") {
+      json(res, 200, await getInstitutional(url.searchParams.get("symbol") || "", url.searchParams.get("days") || "5"));
       return;
     }
     await serveStatic(res, url.pathname);
