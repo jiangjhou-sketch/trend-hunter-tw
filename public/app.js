@@ -111,6 +111,8 @@ async function loadDetail(item) {
   const data = await api(`/api/chart?symbol=${encodeURIComponent(item.symbol)}`, 30000);
   state.chartRows = data.rows;
   drawChart();
+  await loadInstitutional(item);
+  await loadBrokerBranches(item);
   setStatus("圖表完成");
 }
 
@@ -149,8 +151,127 @@ function clearDetail() {
   el("detailTitle").textContent = "沒有符合條件的股票";
   el("detailSub").textContent = "請稍後重新掃描，或切換市場。";
   el("priceStrip").innerHTML = "";
+  el("institutionSummary").innerHTML = "";
+  el("institutionTable").innerHTML = "";
   el("recommendBox").innerHTML = "";
+  el("brokerStatus").textContent = "選取股票後查詢分點資料。";
+  el("brokerBuy").innerHTML = "";
+  el("brokerSell").innerHTML = "";
   if (state.chart) state.chart.clear();
+}
+
+async function loadInstitutional(item) {
+  const days = el("institutionDays").value || "5";
+  el("institutionSummary").innerHTML = `<div class="broker-empty">法人資料讀取中...</div>`;
+  el("institutionTable").innerHTML = "";
+  try {
+    const data = await api(`/api/institution?symbol=${encodeURIComponent(item.symbol)}&days=${days}`, 45000);
+    renderInstitutional(data);
+  } catch (error) {
+    el("institutionSummary").innerHTML = `<div class="broker-empty">法人資料讀取失敗：${error.message}</div>`;
+  }
+}
+
+function renderInstitutional(data) {
+  const streakText = data.buyStreak > 0 ? `連買 ${data.buyStreak} 日` : data.sellStreak > 0 ? `連賣 ${data.sellStreak} 日` : "多空未連續";
+  const forceClass = priceClass(data.totalLots);
+  el("institutionSummary").innerHTML = `
+    <div class="price-card">
+      <span>籌碼集中度</span>
+      <strong class="price-main">${data.concentrationScore}</strong>
+    </div>
+    <div class="price-card">
+      <span>法人天數</span>
+      <strong>${streakText}</strong>
+    </div>
+    <div class="price-card">
+      <span>${data.days}日合計</span>
+      <strong class="${forceClass}">${fmt(data.totalLots, 0)} 張</strong>
+    </div>
+    <div class="price-card">
+      <span>法人力度</span>
+      <strong class="${forceClass}">${fmt(data.strength, 1)}%</strong>
+    </div>
+  `;
+
+  if (!data.rows?.length) {
+    el("institutionTable").innerHTML = `<div class="broker-empty">查無法人買賣資料。</div>`;
+    return;
+  }
+  el("institutionTable").innerHTML = `
+    <table>
+      <thead>
+        <tr>
+          <th>日期</th>
+          <th>外資</th>
+          <th>投信</th>
+          <th>自營商</th>
+          <th>合計</th>
+          <th>力度</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${data.rows.map((row) => `
+          <tr>
+            <td>${row.date}</td>
+            <td>${fmt(row.foreignLots, 0)}</td>
+            <td>${fmt(row.investmentTrustLots, 0)}</td>
+            <td>${fmt(row.dealerLots, 0)}</td>
+            <td class="${priceClass(row.totalLots)}">${fmt(row.totalLots, 0)}</td>
+            <td class="${priceClass(row.force)}">${fmt(row.force * 100, 1)}%</td>
+          </tr>
+        `).join("")}
+      </tbody>
+    </table>
+    <div class="broker-status">資料來源：${data.source}。法人力度 = 法人買賣超張數 / 當日成交張數。</div>
+  `;
+}
+
+async function loadBrokerBranches(item) {
+  const days = el("brokerDays").value || "5";
+  el("brokerStatus").textContent = `查詢 ${item.name} 近 ${days} 日券商分點...`;
+  el("brokerBuy").innerHTML = `<div class="broker-empty">讀取中...</div>`;
+  el("brokerSell").innerHTML = `<div class="broker-empty">讀取中...</div>`;
+  try {
+    const data = await api(`/api/brokers?symbol=${encodeURIComponent(item.symbol)}&days=${days}`, 30000);
+    renderBrokerBranches(data);
+  } catch (error) {
+    el("brokerStatus").textContent = `分點資料讀取失敗：${error.message}`;
+    el("brokerBuy").innerHTML = "";
+    el("brokerSell").innerHTML = "";
+  }
+}
+
+function renderBrokerTable(rows) {
+  if (!rows.length) return `<div class="broker-empty">目前沒有可直接顯示的結構化分點資料。</div>`;
+  return `
+    <table>
+      <thead>
+        <tr><th>#</th><th>分點</th><th>買進</th><th>賣出</th><th>買賣超</th></tr>
+      </thead>
+      <tbody>
+        ${rows.slice(0, 15).map((row, index) => `
+          <tr>
+            <td>${index + 1}</td>
+            <td>${row.name}</td>
+            <td>${fmt(row.buy, 0)}</td>
+            <td>${fmt(row.sell, 0)}</td>
+            <td class="${priceClass(row.net)}">${fmt(row.net, 0)}</td>
+          </tr>
+        `).join("")}
+      </tbody>
+    </table>
+  `;
+}
+
+function renderBrokerBranches(data) {
+  el("brokerBuy").innerHTML = renderBrokerTable(data.buyTop || []);
+  el("brokerSell").innerHTML = renderBrokerTable(data.sellTop || []);
+  el("brokerStatus").innerHTML = `
+    <span>${data.message}</span>
+    <a href="${data.sourceUrl}" target="_blank" rel="noreferrer">CMoney分點頁</a>
+    <a href="${data.officialUrl}" target="_blank" rel="noreferrer">官方資料頁</a>
+  `;
 }
 
 function drawChart() {
@@ -261,5 +382,11 @@ document.querySelectorAll(".chart-tabs button").forEach((btn) => {
 });
 
 el("refreshBtn").addEventListener("click", () => runScan({ force: true }));
+el("brokerDays").addEventListener("change", () => {
+  if (state.selected) loadBrokerBranches(state.selected);
+});
+el("institutionDays").addEventListener("change", () => {
+  if (state.selected) loadInstitutional(state.selected);
+});
 window.addEventListener("resize", () => state.chart?.resize());
 runScan();

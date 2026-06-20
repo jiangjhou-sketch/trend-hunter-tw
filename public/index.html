@@ -74,6 +74,22 @@
           </div>
 
           <div class="price-strip" id="priceStrip"></div>
+          <section class="institution-panel">
+            <div class="broker-head">
+              <div>
+                <h2>籌碼集中度 / 法人力度</h2>
+                <p>統計三大法人買賣超天數、合計張數與相對成交量力度。</p>
+              </div>
+              <select id="institutionDays" aria-label="法人查詢天數">
+                <option value="3">近 3 日</option>
+                <option value="5" selected>近 5 日</option>
+                <option value="10">近 10 日</option>
+                <option value="15">近 15 日</option>
+              </select>
+            </div>
+            <div class="institution-summary" id="institutionSummary"></div>
+            <div class="institution-table" id="institutionTable"></div>
+          </section>
           <div class="recommend-box" id="recommendBox"></div>
 
           <div class="chart-tabs">
@@ -83,6 +99,32 @@
             <button data-chart="chip">400張 / 1000張</button>
           </div>
           <div id="chart" class="chart"></div>
+          <section class="broker-panel">
+            <div class="broker-head">
+              <div>
+                <h2>券商分點前15大</h2>
+                <p>可切換查詢期間，顯示買超與賣超分點。</p>
+              </div>
+              <select id="brokerDays" aria-label="分點查詢天數">
+                <option value="1">近 1 日</option>
+                <option value="3">近 3 日</option>
+                <option value="5" selected>近 5 日</option>
+                <option value="10">近 10 日</option>
+                <option value="15">近 15 日</option>
+              </select>
+            </div>
+            <div id="brokerStatus" class="broker-status">選取股票後查詢分點資料。</div>
+            <div class="broker-grid">
+              <div>
+                <h3>買超前15大</h3>
+                <div id="brokerBuy" class="broker-table"></div>
+              </div>
+              <div>
+                <h3>賣超前15大</h3>
+                <div id="brokerSell" class="broker-table"></div>
+              </div>
+            </div>
+          </section>
           <div class="chip-note">
             400張與1000張大戶增減屬集保股權分散或授權籌碼資料。本工具目前以公開日 K 價量推估方向並以「張」呈現，後續可在後端接入授權 API 替換成真實大戶增減。
           </div>

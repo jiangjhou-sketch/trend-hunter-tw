@@ -452,6 +452,150 @@ button:disabled {
   height: 520px;
 }
 
+.broker-panel {
+  margin: 12px 16px 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.institution-panel {
+  margin: 15px 16px 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.institution-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  padding: 14px;
+}
+
+.institution-table {
+  border-top: 1px solid var(--line);
+  overflow: auto;
+}
+
+.institution-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.institution-table th,
+.institution-table td {
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--line);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.institution-table th:first-child,
+.institution-table td:first-child {
+  text-align: left;
+}
+
+.broker-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  border-bottom: 1px solid var(--line);
+  background: #f8fbfc;
+}
+
+.broker-head h2 {
+  font-size: 17px;
+}
+
+.broker-head p {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.broker-head select {
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  padding: 0 10px;
+  font: inherit;
+  font-weight: 750;
+}
+
+.broker-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 12px 14px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.broker-status a {
+  color: var(--accent-dark);
+  font-weight: 800;
+}
+
+.broker-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0;
+  border-top: 1px solid var(--line);
+}
+
+.broker-grid > div:first-child {
+  border-right: 1px solid var(--line);
+}
+
+.broker-grid h3 {
+  margin: 0;
+  padding: 12px 14px;
+  color: var(--ink);
+  font-size: 14px;
+  background: #fbfdfe;
+  border-bottom: 1px solid var(--line);
+}
+
+.broker-table {
+  min-height: 128px;
+  overflow: auto;
+}
+
+.broker-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.broker-table th,
+.broker-table td {
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--line);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.broker-table th:nth-child(2),
+.broker-table td:nth-child(2) {
+  text-align: left;
+}
+
+.broker-empty {
+  padding: 20px 14px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
 .chip-note {
   margin: 0 16px 16px;
   padding: 12px 14px;
@@ -487,8 +631,20 @@ button:disabled {
   .summary-grid,
   .layout,
   .price-strip,
+  .institution-summary,
+  .broker-grid,
   .recommend-box {
     grid-template-columns: 1fr;
+  }
+
+  .broker-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .broker-grid > div:first-child {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
   }
 
   .segmented {
