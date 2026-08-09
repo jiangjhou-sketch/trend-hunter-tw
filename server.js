@@ -177,7 +177,9 @@ function withIndicators(rows) {
   return rows.map((row, i) => {
     const close20 = closes.slice(Math.max(0, i - 19), i + 1);
     const vol5 = average(volumes.slice(Math.max(0, i - 4), i + 1));
+    const vol10 = average(volumes.slice(Math.max(0, i - 9), i + 1));
     const vol20 = average(volumes.slice(Math.max(0, i - 19), i + 1));
+    const vol60 = average(volumes.slice(Math.max(0, i - 59), i + 1));
     const ma20 = average(close20);
     const sd20 = std(close20);
     const recent9 = rows.slice(Math.max(0, i - 8), i + 1);
@@ -198,9 +200,13 @@ function withIndicators(rows) {
       ma5: average(closes.slice(Math.max(0, i - 4), i + 1)),
       ma20,
       volMa5: vol5,
+      volMa10: vol10,
       volMa20: vol20,
+      volMa60: vol60,
       volMa5Lots: vol5 != null ? vol5 / 1000 : null,
       volMa20Lots: vol20 != null ? vol20 / 1000 : null,
+      volMa10Lots: vol10 != null ? vol10 / 1000 : null,
+      volMa60Lots: vol60 != null ? vol60 / 1000 : null,
       volSurge: vol5 != null && vol20 ? vol5 / vol20 : null,
       macd: dif[i],
       macdSignal: macdSignal[i],
@@ -216,18 +222,28 @@ function withIndicators(rows) {
   });
 }
 
-function summarizeChart(rows) {
+function summarizeChart(rows, shortDays = 5, longDays = 20) {
   const latest = rows.at(-1);
+  const shortKey = `volMa${shortDays}`;
+  const longKey = `volMa${longDays}`;
   let streak = 0;
   for (let i = rows.length - 1; i >= 0; i -= 1) {
-    if (rows[i].volMa5 > rows[i].volMa20) streak += 1;
+    if (rows[i][shortKey] > rows[i][longKey]) streak += 1;
     else break;
   }
   const prev = rows.at(-2);
+  const estimatedMainForceRatio = average(rows.slice(-5).map((row) => {
+    const estimatedLots = (row.large400Change || 0) + (row.large1000Change || 0);
+    return row.volumeLots ? estimatedLots / row.volumeLots : 0;
+  }));
+  const mainForceConcentration = Math.max(0, Math.min(100, Math.round(50 + estimatedMainForceRatio * 100)));
   return {
     latest,
     streak,
     pass: streak >= 2,
+    shortDays,
+    longDays,
+    volumePairLabel: `${shortDays}日均量 / ${longDays}日均量`,
     macdBull: latest?.macd > latest?.macdSignal,
     kdBull: latest?.k > latest?.d,
     priceAboveMa20: latest?.close > latest?.ma20,
@@ -235,7 +251,8 @@ function summarizeChart(rows) {
       ? (latest.close - latest.bbLower) / (latest.bbUpper - latest.bbLower)
       : null,
     bigMoneyTrend: average(rows.slice(-5).map((r) => r.bigMoneyProxy)),
-    volumeMomentum: latest?.volSurge ?? null,
+    volumeMomentum: latest?.[shortKey] && latest?.[longKey] ? latest[shortKey] / latest[longKey] : null,
+    mainForceConcentration,
     change1d: prev ? ((latest.close - prev.close) / prev.close) * 100 : null
   };
 }
@@ -246,7 +263,7 @@ function scoreCandidate(item) {
   const reasons = [];
   if (s.streak >= 2) {
     score += 32;
-    reasons.push(`5日均量連續 ${s.streak} 日大於20日均量`);
+    reasons.push(`${s.volumePairLabel}連續 ${s.streak} 日短均量較強`);
   }
   if (s.macdBull) {
     score += 18;
@@ -268,11 +285,15 @@ function scoreCandidate(item) {
     score += 8;
     reasons.push("近5日量價推估偏向買盤主導");
   }
+  if (s.mainForceConcentration >= 60) {
+    score += 8;
+    reasons.push(`主力籌碼集中度推估 ${s.mainForceConcentration}`);
+  }
   if (item.volume > 1000) {
     score += 6;
     reasons.push("成交量具備基本流動性");
   }
-  return { score: Math.round(score), reasons: reasons.slice(0, 5) };
+  return { score: Math.min(100, Math.round(score)), reasons: reasons.slice(0, 5) };
 }
 
 async function mapLimit(items, limit, mapper) {
@@ -293,8 +314,19 @@ async function mapLimit(items, limit, mapper) {
   return results;
 }
 
-export async function scan(market = "listed", force = false) {
-  const key = `scan:${market}`;
+function parseVolumePair(value) {
+  const [shortText, longText] = String(value || "5-20").split("-");
+  const shortDays = Number(shortText);
+  const longDays = Number(longText);
+  const allowed = new Set([5, 10, 20, 60]);
+  if (!allowed.has(shortDays) || !allowed.has(longDays) || shortDays >= longDays) return [5, 20];
+  return [shortDays, longDays];
+}
+
+export async function scan(market = "listed", force = false, volumePair = "5-20") {
+  const [shortDays, longDays] = parseVolumePair(volumePair);
+  const normalizedPair = `${shortDays}-${longDays}`;
+  const key = `scan:${market}:${normalizedPair}`;
   if (force) {
     clearCache("rank:");
     cache.delete(key);
@@ -304,7 +336,7 @@ export async function scan(market = "listed", force = false) {
     const ranks = (await Promise.all(markets.map(getRank))).flat();
     const scanned = await mapLimit(ranks.slice(0, 100 * markets.length), 8, async (row) => {
       const chart = await getChart(row.symbol);
-      const summary = summarizeChart(chart);
+      const summary = summarizeChart(chart, shortDays, longDays);
       const ai = scoreCandidate({ ...row, summary });
       return { ...row, summary, ai };
     });
@@ -317,7 +349,8 @@ export async function scan(market = "listed", force = false) {
       source: markets,
       total: scanned.length,
       candidates,
-      recommendations: candidates.slice(0, 5)
+      recommendations: candidates.slice(0, 5),
+      volumePair: normalizedPair
     };
   });
 }
@@ -498,7 +531,7 @@ export const server = http.createServer(async (req, res) => {
       return;
     }
     if (url.pathname === "/api/scan") {
-      json(res, 200, await scan(url.searchParams.get("market") || "listed", url.searchParams.get("refresh") === "1"));
+      json(res, 200, await scan(url.searchParams.get("market") || "listed", url.searchParams.get("refresh") === "1", url.searchParams.get("volumePair") || "5-20"));
       return;
     }
     if (url.pathname === "/api/brokers") {
