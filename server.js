@@ -263,6 +263,28 @@ function ema(values, period) {
   return out;
 }
 
+function rsi(values, period) {
+  const output = Array(values.length).fill(null);
+  if (values.length <= period) return output;
+  let gains = 0;
+  let losses = 0;
+  for (let index = 1; index <= period; index += 1) {
+    const change = values[index] - values[index - 1];
+    gains += Math.max(change, 0);
+    losses += Math.max(-change, 0);
+  }
+  let averageGain = gains / period;
+  let averageLoss = losses / period;
+  output[period] = averageLoss === 0 ? 100 : 100 - 100 / (1 + averageGain / averageLoss);
+  for (let index = period + 1; index < values.length; index += 1) {
+    const change = values[index] - values[index - 1];
+    averageGain = (averageGain * (period - 1) + Math.max(change, 0)) / period;
+    averageLoss = (averageLoss * (period - 1) + Math.max(-change, 0)) / period;
+    output[index] = averageLoss === 0 ? 100 : 100 - 100 / (1 + averageGain / averageLoss);
+  }
+  return output;
+}
+
 function withIndicators(rows) {
   const closes = rows.map((r) => r.close);
   const volumes = rows.map((r) => r.volume);
@@ -270,13 +292,17 @@ function withIndicators(rows) {
   const ema26 = ema(closes, 26);
   const dif = closes.map((_, i) => (ema12[i] != null && ema26[i] != null ? ema12[i] - ema26[i] : null));
   const macdSignal = ema(dif, 9);
+  const rsi6 = rsi(closes, 6);
+  const rsi13 = rsi(closes, 13);
   let k = 50;
   let d = 50;
   return rows.map((row, i) => {
     const close20 = closes.slice(Math.max(0, i - 19), i + 1);
     const vol5 = average(volumes.slice(Math.max(0, i - 4), i + 1));
+    const vol3 = average(volumes.slice(Math.max(0, i - 2), i + 1));
     const vol10 = average(volumes.slice(Math.max(0, i - 9), i + 1));
     const vol20 = average(volumes.slice(Math.max(0, i - 19), i + 1));
+    const vol18 = average(volumes.slice(Math.max(0, i - 17), i + 1));
     const vol60 = average(volumes.slice(Math.max(0, i - 59), i + 1));
     const ma20 = average(close20);
     const sd20 = std(close20);
@@ -297,9 +323,13 @@ function withIndicators(rows) {
       volumeLots,
       ma5: average(closes.slice(Math.max(0, i - 4), i + 1)),
       ma20,
+      ma60: average(closes.slice(Math.max(0, i - 59), i + 1)),
+      ma240: average(closes.slice(Math.max(0, i - 239), i + 1)),
+      volMa3: vol3,
       volMa5: vol5,
       volMa10: vol10,
       volMa20: vol20,
+      volMa18: vol18,
       volMa60: vol60,
       volMa5Lots: vol5 != null ? vol5 / 1000 : null,
       volMa20Lots: vol20 != null ? vol20 / 1000 : null,
@@ -311,6 +341,8 @@ function withIndicators(rows) {
       macdHist: hist,
       k,
       d,
+      rsi6: rsi6[i],
+      rsi13: rsi13[i],
       bbUpper: ma20 != null && sd20 != null ? ma20 + sd20 * 2 : null,
       bbLower: ma20 != null && sd20 != null ? ma20 - sd20 * 2 : null,
       large400Change: estimatedLargeLots * 0.45,
@@ -330,6 +362,12 @@ function summarizeChart(rows, shortDays = 5, longDays = 20) {
     else break;
   }
   const prev = rows.at(-2);
+  const fiveDaysAgo = rows.at(-6);
+  const futureDeductionRows = rows.length >= 240 ? rows.slice(-240, -220) : [];
+  const futureDeductionAverage = average(futureDeductionRows.map((row) => row.close));
+  const volumeGoldenCross = rows.some((row, index) => index >= rows.length - 3
+    && row.volMa3 > row.volMa18
+    && rows[index - 1]?.volMa3 <= rows[index - 1]?.volMa18);
   const estimatedMainForceRatio = average(rows.slice(-5).map((row) => {
     const estimatedLots = (row.large400Change || 0) + (row.large1000Change || 0);
     return row.volumeLots ? estimatedLots / row.volumeLots : 0;
@@ -342,6 +380,11 @@ function summarizeChart(rows, shortDays = 5, longDays = 20) {
     shortDays,
     longDays,
     volumePairLabel: `${shortDays}日均量 / ${longDays}日均量`,
+    yearTrend: latest?.ma240 > fiveDaysAgo?.ma240,
+    deductionUp: Number.isFinite(futureDeductionAverage) && latest?.close > futureDeductionAverage,
+    maTrend: latest?.ma60 > fiveDaysAgo?.ma60 || latest?.ma20 > fiveDaysAgo?.ma20,
+    volumeGoldenCross,
+    rsiMomentum: latest?.rsi13 > 50 && latest?.rsi6 > 70,
     macdBull: latest?.macd > latest?.macdSignal,
     kdBull: latest?.k > latest?.d,
     priceAboveMa20: latest?.close > latest?.ma20,
@@ -421,10 +464,16 @@ function parseVolumePair(value) {
   return [shortDays, longDays];
 }
 
-export async function scan(market = "listed", force = false, volumePair = "5-20") {
+function parseTechFilters(value) {
+  const allowed = new Set(["yearTrend", "deductionUp", "maTrend", "volumeGoldenCross", "rsiMomentum"]);
+  return [...new Set(String(value || "").split(",").filter((filter) => allowed.has(filter)))];
+}
+
+export async function scan(market = "listed", force = false, volumePair = "5-20", tech = "") {
   const [shortDays, longDays] = parseVolumePair(volumePair);
   const normalizedPair = `${shortDays}-${longDays}`;
-  const key = `scan:${market}:${normalizedPair}`;
+  const techFilters = parseTechFilters(tech);
+  const key = `scan:${market}:${normalizedPair}:${techFilters.join(",")}`;
   if (force) {
     clearCache("rank:");
     cache.delete(key);
@@ -439,7 +488,7 @@ export async function scan(market = "listed", force = false, volumePair = "5-20"
       return { ...row, summary, ai };
     });
     const candidates = scanned
-      .filter((row) => row.summary?.pass)
+      .filter((row) => row.summary?.pass && techFilters.every((filter) => row.summary[filter]))
       .sort((a, b) => b.ai.score - a.ai.score || b.changePercent - a.changePercent);
     return {
       market,
@@ -448,7 +497,8 @@ export async function scan(market = "listed", force = false, volumePair = "5-20"
       total: scanned.length,
       candidates,
       recommendations: candidates.slice(0, 5),
-      volumePair: normalizedPair
+      volumePair: normalizedPair,
+      techFilters
     };
   });
 }
@@ -629,7 +679,7 @@ export const server = http.createServer(async (req, res) => {
       return;
     }
     if (url.pathname === "/api/scan") {
-      json(res, 200, await scan(url.searchParams.get("market") || "listed", url.searchParams.get("refresh") === "1", url.searchParams.get("volumePair") || "5-20"));
+      json(res, 200, await scan(url.searchParams.get("market") || "listed", url.searchParams.get("refresh") === "1", url.searchParams.get("volumePair") || "5-20", url.searchParams.get("tech") || ""));
       return;
     }
     if (url.pathname === "/api/brokers") {
