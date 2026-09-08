@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>台股量能排行篩選器</title>
+    <link rel="stylesheet" href="/styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand-block">
+        <span class="eyebrow">Yahoo 台股漲幅排行分析</span>
+        <h1>台股量能排行篩選器</h1>
+        <p id="criteriaText">篩出可選短長期均量條件，且至少連續 2 個交易日成立的強勢股。</p>
+      </div>
+      <div class="header-actions">
+        <div class="status" id="status">準備掃描</div>
+        <button id="refreshBtn" class="primary">重新掃描</button>
+      </div>
+    </header>
+
+    <main>
+      <section class="toolbar">
+        <div class="segmented" role="tablist" aria-label="市場">
+          <button class="active" data-market="listed">上市前100</button>
+          <button data-market="otc">上櫃前100</button>
+          <button data-market="allMarkets">上市 + 上櫃</button>
+        </div>
+        <label class="volume-filter" for="volumePair">
+          <span>均量選股</span>
+          <select id="volumePair" aria-label="短長期均量組合">
+            <option value="5-10">5 日 / 10 日</option>
+            <option value="5-20" selected>5 日 / 20 日</option>
+            <option value="5-60">5 日 / 60 日</option>
+            <option value="10-20">10 日 / 20 日</option>
+            <option value="10-60">10 日 / 60 日</option>
+          </select>
+        </label>
+        <div class="score-help">
+          <strong>AI分數</strong>
+          <span>滿分 100，綜合量能、MACD、KD、布林位置、流動性與量價買盤推估。</span>
+        </div>
+      </section>
+
+      <section class="technical-panel" aria-labelledby="technicalFiltersTitle">
+        <div class="technical-head">
+          <div>
+            <h2 id="technicalFiltersTitle">技術分析篩選</h2>
+            <p>多選時，股票須同時符合所有已勾選條件。</p>
+          </div>
+          <span id="activeTechCount">未套用</span>
+        </div>
+        <div class="technical-grid">
+          <label class="tech-option">
+            <span class="tech-number">1</span>
+            <span class="tech-copy"><strong>年線向上</strong><small>MA240 近 5 日斜率大於 0</small></span>
+            <input type="checkbox" data-tech="yearTrend" aria-label="年線向上">
+          </label>
+          <label class="tech-option">
+            <span class="tech-number">2</span>
+            <span class="tech-copy"><strong>未來扣抵向上</strong><small>現價高於未來 20 日扣抵均價</small></span>
+            <input type="checkbox" data-tech="deductionUp" aria-label="未來扣抵向上">
+          </label>
+          <label class="tech-option">
+            <span class="tech-number">3</span>
+            <span class="tech-copy"><strong>季線或月線向上</strong><small>MA60 或 MA20 近 5 日走升</small></span>
+            <input type="checkbox" data-tech="maTrend" aria-label="季線或月線向上">
+          </label>
+          <label class="tech-option">
+            <span class="tech-number">4</span>
+            <span class="tech-copy"><strong>均量金叉 3 日內</strong><small>3 日均量上穿 18 日均量</small></span>
+            <input type="checkbox" data-tech="volumeGoldenCross" aria-label="均量金叉 3 日內">
+          </label>
+          <label class="tech-option">
+            <span class="tech-number">5</span>
+            <span class="tech-copy"><strong>RSI13 &gt; 50 且 RSI6 &gt; 70</strong><small>雙 RSI 多方動能</small></span>
+            <input type="checkbox" data-tech="rsiMomentum" aria-label="RSI13 大於 50 且 RSI6 大於 70">
+          </label>
+        </div>
+      </section>
+
+      <section class="summary-grid">
+        <div class="metric">
+          <span>已分析股票</span>
+          <strong id="totalCount">0</strong>
+        </div>
+        <div class="metric">
+          <span>至少連續 2 日</span>
+          <strong id="candidateCount">0</strong>
+        </div>
+        <div class="metric">
+          <span>AI 推薦檔數</span>
+          <strong id="recommendCount">0</strong>
+        </div>
+        <div class="metric">
+          <span>最新掃描</span>
+          <strong id="scanTime">-</strong>
+        </div>
+      </section>
+
+      <section class="layout">
+        <aside class="panel result-panel">
+          <div class="panel-head">
+            <div>
+              <h2>篩選結果</h2>
+              <p>點選股票查看技術圖表</p>
+            </div>
+            <span id="sourceLabel">上市</span>
+          </div>
+          <div id="stockList" class="stock-list"></div>
+        </aside>
+
+        <section class="detail">
+          <div class="panel-head detail-head">
+            <div>
+              <h2 id="detailTitle">尚未選取股票</h2>
+              <p id="detailSub">掃描完成後選擇股票查看技術分析。</p>
+            </div>
+            <a id="yahooLink" class="ghost" href="https://tw.stock.yahoo.com/rank/change-up" target="_blank" rel="noreferrer">Yahoo 來源</a>
+          </div>
+
+          <div class="chart-tabs">
+            <button class="active" data-chart="price">價量 / 布林</button>
+            <button data-chart="macd">MACD</button>
+            <button data-chart="kd">KD</button>
+            <button data-chart="chip">400張 / 1000張</button>
+          </div>
+          <div id="chart" class="chart"></div>
+
+          <div class="price-strip" id="priceStrip"></div>
+          <section class="institution-panel">
+            <div class="broker-head">
+              <div>
+                <h2>籌碼集中度 / 法人力度</h2>
+                <p>統計三大法人買賣超天數、合計張數與相對成交量力度。</p>
+              </div>
+              <select id="institutionDays" aria-label="法人查詢天數">
+                <option value="3">近 3 日</option>
+                <option value="5" selected>近 5 日</option>
+                <option value="10">近 10 日</option>
+                <option value="15">近 15 日</option>
+              </select>
+            </div>
+            <div class="institution-summary" id="institutionSummary"></div>
+            <div class="institution-table" id="institutionTable"></div>
+          </section>
+          <div class="recommend-box" id="recommendBox"></div>
+          <section class="broker-panel">
+            <div class="broker-head">
+              <div>
+                <h2>券商分點前15大</h2>
+                <p>可切換查詢期間，顯示買超與賣超分點。</p>
+              </div>
+              <select id="brokerDays" aria-label="分點查詢天數">
+                <option value="1">近 1 日</option>
+                <option value="3">近 3 日</option>
+                <option value="5" selected>近 5 日</option>
+                <option value="10">近 10 日</option>
+                <option value="15">近 15 日</option>
+              </select>
+            </div>
+            <div id="brokerStatus" class="broker-status">選取股票後查詢分點資料。</div>
+            <div class="broker-grid">
+              <div>
+                <h3>買超前15大</h3>
+                <div id="brokerBuy" class="broker-table"></div>
+              </div>
+              <div>
+                <h3>賣超前15大</h3>
+                <div id="brokerSell" class="broker-table"></div>
+              </div>
+            </div>
+          </section>
+          <div class="chip-note">
+            400張與1000張大戶增減屬集保股權分散或授權籌碼資料。本工具目前以公開日 K 價量推估方向並以「張」呈現，後續可在後端接入授權 API 替換成真實大戶增減。
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
