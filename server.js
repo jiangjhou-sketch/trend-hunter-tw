@@ -7,6 +7,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, "public");
 const nodeProcess = globalThis.process;
 const port = Number(nodeProcess?.env?.PORT || 4173);
+const rankSourceMode = String(nodeProcess?.env?.RANK_SOURCE || "auto").toLowerCase();
 
 const cache = new Map();
 const CACHE_MS = {
@@ -49,6 +50,18 @@ async function fetchText(url) {
   });
   if (!res.ok) throw new Error(`Fetch failed ${res.status}: ${url}`);
   return res.text();
+}
+
+async function fetchJson(url) {
+  const res = await fetch(url, {
+    signal: AbortSignal.timeout(15000),
+    headers: {
+      "user-agent": "Mozilla/5.0 stock screener research tool",
+      accept: "application/json,text/plain,*/*"
+    }
+  });
+  if (!res.ok) throw new Error(`Fetch failed ${res.status}: ${url}`);
+  return res.json();
 }
 
 function htmlToLines(html) {
@@ -104,11 +117,96 @@ function parseRank(html, market) {
   return market === "all" ? rows.slice(0, 100) : rows.filter((row) => row.market === market).slice(0, 100);
 }
 
+function taipeiDate(daysAgo = 0) {
+  const now = new Date(Date.now() + 8 * 60 * 60 * 1000);
+  now.setUTCDate(now.getUTCDate() - daysAgo);
+  return now.toISOString().slice(0, 10);
+}
+
+function parseOfficialRank(json, market, dataDate) {
+  const table = json.tables?.find((item) => item.data?.some((row) => /^\d{4}$/.test(String(row?.[0] || "").trim())));
+  if (!table?.data) return [];
+
+  const listed = market === "listed";
+  const rows = table.data.map((values) => {
+    const stockNo = String(values[0] || "").trim();
+    // Official daily quote tables also include ETFs and warrants. This screener is for common stocks.
+    if (!/^\d{4}$/.test(stockNo)) return null;
+
+    const price = toNumber(values[listed ? 8 : 2]);
+    const rawChange = values[listed ? 10 : 3];
+    let change = toNumber(rawChange);
+    if (!Number.isFinite(price) || !Number.isFinite(change)) return null;
+
+    if (listed) {
+      const sign = String(values[9] || "");
+      if (sign.includes("-")) change = -Math.abs(change);
+      else if (sign.includes("+")) change = Math.abs(change);
+    }
+
+    const previousClose = price - change;
+    const changePercent = previousClose ? (change / previousClose) * 100 : 0;
+    return {
+      name: String(values[1] || stockNo).trim(),
+      symbol: `${stockNo}.${listed ? "TW" : "TWO"}`,
+      market,
+      price,
+      change,
+      changePercent,
+      high: toNumber(values[listed ? 6 : 5]),
+      low: toNumber(values[listed ? 7 : 6]),
+      spread: null,
+      volume: (toNumber(values[listed ? 2 : 8]) || 0) / 1000,
+      amount: toNumber(values[listed ? 4 : 9]),
+      dataDate,
+      rankSource: listed ? "TWSE official close" : "TPEx official close"
+    };
+  }).filter(Boolean);
+
+  return rows
+    .sort((a, b) => b.changePercent - a.changePercent || b.volume - a.volume)
+    .slice(0, 100)
+    .map((row, index) => ({ ...row, rank: index + 1 }));
+}
+
+async function getOfficialRank(market) {
+  let lastError;
+  for (let daysAgo = 0; daysAgo < 10; daysAgo += 1) {
+    const dataDate = taipeiDate(daysAgo);
+    const compactDate = dataDate.replaceAll("-", "");
+    const tpexDate = dataDate.replaceAll("-", "/");
+    const url = market === "listed"
+      ? `https://www.twse.com.tw/rwd/zh/afterTrading/MI_INDEX?date=${compactDate}&type=ALLBUT0999&response=json`
+      : `https://www.tpex.org.tw/www/zh-tw/afterTrading/dailyQuotes?date=${tpexDate}&response=json`;
+    try {
+      const rows = parseOfficialRank(await fetchJson(url), market, dataDate);
+      if (rows.length) return rows;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error(`No official ${market} rank data available`);
+}
+
 export async function getRank(market = "all") {
   const normalized = rankUrls[market] ? market : "all";
   return cached(`rank:${normalized}`, CACHE_MS.rank, async () => {
-    const html = await fetchText(rankUrls[normalized]);
-    return parseRank(html, normalized);
+    if (rankSourceMode !== "official") {
+      try {
+        const html = await fetchText(rankUrls[normalized]);
+        const rows = parseRank(html, normalized);
+        if (rows.length) return rows;
+      } catch (error) {
+        console.warn(`Yahoo rank unavailable for ${normalized}; using official fallback: ${error.message}`);
+      }
+    }
+
+    if (normalized === "all") {
+      return (await Promise.all([getOfficialRank("listed"), getOfficialRank("otc")])).flat()
+        .sort((a, b) => b.changePercent - a.changePercent)
+        .slice(0, 100);
+    }
+    return getOfficialRank(normalized);
   });
 }
 
